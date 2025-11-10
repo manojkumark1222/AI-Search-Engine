@@ -5,12 +5,12 @@
       "src": "frontend/package.json",
       "use": "@vercel/static-build",
       "config": {
-        "distDir": "frontend/dist"
+        "outputDirectory": "frontend/dist"
       }
     }
   ],
-  "buildCommand": "npm run build",
-  "installCommand": "npm install",
+  "buildCommand": "npm run --prefix frontend build",
+  "installCommand": "npm install --prefix frontend",
   "framework": "vite",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }

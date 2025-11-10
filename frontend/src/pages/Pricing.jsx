@@ -253,7 +253,6 @@ export default function Pricing() {
           <p style={{
             fontSize: '20px',
             color: '#475569',
-            margin: 0,
             maxWidth: '600px',
             margin: '0 auto'
           }}>
