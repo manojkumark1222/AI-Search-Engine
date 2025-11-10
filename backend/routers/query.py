@@ -1,16 +1,21 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func, and_
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
 from database import get_db
 from models import Connection, QueryHistory, User
 from routers.auth import get_current_user
 from connectors.factory import get_connector
 from nlp.query_engine import QueryEngine
+from nlp.advanced_query_engine import AdvancedQueryEngine
+from plan_limits import can_execute_query
 import pandas as pd
 
 router = APIRouter()
 query_engine = QueryEngine()
+advanced_query_engine = AdvancedQueryEngine()  # Enhanced NLP engine
 
 # Pydantic models
 class QueryRequest(BaseModel):
@@ -44,6 +49,19 @@ def get_connection_by_id_or_default(connection_id: str, user_id: int, db: Sessio
 def run_query(query_request: QueryRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Execute a natural language query on a data source"""
     try:
+        # Check query limits based on plan
+        start_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        queries_this_month = db.query(QueryHistory).filter(
+            and_(
+                QueryHistory.user_id == current_user.id,
+                QueryHistory.created_at >= start_of_month
+            )
+        ).count()
+        
+        can_query, message = can_execute_query(current_user, queries_this_month)
+        if not can_query:
+            raise HTTPException(status_code=403, detail=message)
+        
         # Get connection
         connection = get_connection_by_id_or_default(query_request.source_id, current_user.id, db)
         
@@ -61,8 +79,14 @@ def run_query(query_request: QueryRequest, current_user: User = Depends(get_curr
             # Get schema
             schema = connector.get_schema()
             
-            # Parse natural language query
-            parsed_query = query_engine.parse_query(query_request.query_text, schema)
+            # Parse natural language query using advanced engine
+            # Try advanced engine first, fallback to basic engine if needed
+            try:
+                parsed_query = advanced_query_engine.parse_query(query_request.query_text, schema)
+            except Exception as e:
+                # Fallback to basic engine
+                print(f"Advanced engine failed, using basic: {e}")
+                parsed_query = query_engine.parse_query(query_request.query_text, schema)
             
             # Execute query
             result_df = connector.execute_query(parsed_query["query"])
@@ -75,10 +99,15 @@ def run_query(query_request: QueryRequest, current_user: User = Depends(get_curr
             if parsed_query.get("operation"):
                 summary = f"{parsed_query['operation'].replace('_', ' ').title()}: {summary}"
             
-            # Generate suggestions
-            suggestions = query_engine.generate_suggestions(query_request.query_text, results)
+            # Generate intelligent suggestions
+            try:
+                suggestions = advanced_query_engine.generate_suggestions(query_request.query_text, results)
+            except:
+                suggestions = query_engine.generate_suggestions(query_request.query_text, results)
             
-            # Log query to history
+            # Update connection last_used timestamp and log query to history
+            connection.last_used = datetime.utcnow()
+            
             try:
                 history_entry = QueryHistory(
                     user_id=current_user.id,
@@ -88,10 +117,17 @@ def run_query(query_request: QueryRequest, current_user: User = Depends(get_curr
                     result_count=len(result_df)
                 )
                 db.add(history_entry)
-                db.commit()
+                db.commit()  # This will also commit the last_used update
             except Exception as e:
-                # Don't fail if history logging fails
+                # Don't fail if history logging fails, but try to commit last_used
                 print(f"Error logging query history: {e}")
+                db.rollback()
+                try:
+                    # Retry with just the last_used update
+                    connection.last_used = datetime.utcnow()
+                    db.commit()
+                except:
+                    pass
             
             return QueryResponse(
                 summary=summary,
@@ -117,8 +153,11 @@ def _run_demo_query(query_text: str) -> QueryResponse:
     }
     df = pd.DataFrame(demo_data)
     
-    # Parse query
-    parsed_query = query_engine.parse_query(query_text, {"columns": list(df.columns)})
+    # Parse query using advanced engine
+    try:
+        parsed_query = advanced_query_engine.parse_query(query_text, {"columns": list(df.columns)})
+    except:
+        parsed_query = query_engine.parse_query(query_text, {"columns": list(df.columns)})
     
     # Execute on demo data
     try:
@@ -135,7 +174,10 @@ def _run_demo_query(query_text: str) -> QueryResponse:
         
         results = result_df.head(100).to_dict(orient="records")
         summary = f"Demo query executed. Found {len(result_df)} rows. (Using sample data - please add a data connection)"
-        suggestions = query_engine.generate_suggestions(query_text, results)
+        try:
+            suggestions = advanced_query_engine.generate_suggestions(query_text, results)
+        except:
+            suggestions = query_engine.generate_suggestions(query_text, results)
         
         return QueryResponse(
             summary=summary,

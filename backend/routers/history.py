@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import get_db
 from models import QueryHistory, User
 from routers.auth import get_current_user
+from plan_limits import get_query_history_days
 
 router = APIRouter()
 
@@ -55,10 +57,18 @@ def get_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get query history for current user"""
-    history = db.query(QueryHistory).filter(
-        QueryHistory.user_id == current_user.id
-    ).order_by(QueryHistory.created_at.desc()).limit(limit).all()
+    """Get query history for current user (respecting plan limits)"""
+    # Get history retention days based on plan
+    history_days = get_query_history_days(current_user)
+    
+    # Build query with date filter if plan has limit
+    query = db.query(QueryHistory).filter(QueryHistory.user_id == current_user.id)
+    
+    if history_days > 0:  # -1 means unlimited
+        cutoff_date = datetime.utcnow() - timedelta(days=history_days)
+        query = query.filter(QueryHistory.created_at >= cutoff_date)
+    
+    history = query.order_by(QueryHistory.created_at.desc()).limit(limit).all()
     
     return history
 

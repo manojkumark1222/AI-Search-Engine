@@ -2,6 +2,8 @@ from .csv_connector import CSVConnector
 from .excel_connector import ExcelConnector
 from .sql_connector import SQLConnector
 from .mongodb_connector import MongoDBConnector
+from .supabase_connector import SupabaseConnector
+from .firebase_connector import FirebaseConnector
 from .base import BaseConnector
 
 def get_connector(connection_type: str) -> BaseConnector:
@@ -12,6 +14,8 @@ def get_connector(connection_type: str) -> BaseConnector:
         "postgres": SQLConnector,
         "mysql": SQLConnector,
         "mongodb": MongoDBConnector,
+        "supabase": SupabaseConnector,
+        "firebase": FirebaseConnector,
     }
     
     connector_class = connectors.get(connection_type.lower())

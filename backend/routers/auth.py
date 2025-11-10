@@ -87,6 +87,8 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     token: str
     token_type: str = "bearer"
+    plan: str = "free"
+    email: str
 
 @router.post("/login", response_model=TokenResponse)
 def login(login_data: LoginRequest, db: Session = Depends(get_db)):
@@ -99,9 +101,14 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         )
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
+        data={"sub": user.email, "plan": user.plan or "free"}, expires_delta=access_token_expires
     )
-    return {"token": access_token, "token_type": "bearer"}
+    return {
+        "token": access_token,
+        "token_type": "bearer",
+        "plan": user.plan or "free",
+        "email": user.email
+    }
 
 @router.get("/me", response_model=UserResponse)
 async def read_users_me(current_user: User = Depends(get_current_user)):
